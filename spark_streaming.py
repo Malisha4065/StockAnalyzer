@@ -32,9 +32,10 @@ json_df = df.selectExpr("CAST(value AS STRING)") \
     .select(from_json(col("value"), schema).alias("data")) \
     .select("data.*")
 
-# Moving average (5-minute window)
+# Moving average (5-minute window) with watermark so aggregation can use append mode
 agg_df = json_df \
     .withColumn("timestamp", col("timestamp").cast("timestamp")) \
+    .withWatermark("timestamp", "10 minutes") \
     .groupBy(
         window(col("timestamp"), "5 minutes"),
         col("ticker")

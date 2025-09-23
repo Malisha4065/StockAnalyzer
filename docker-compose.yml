@@ -132,7 +132,9 @@ services:
 
   # Airflow Webserver
   airflow-webserver:
-    image: apache/airflow:2.7.1
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
     container_name: airflow-webserver
     command: webserver
     entrypoint: |
@@ -163,7 +165,9 @@ services:
 
   # Airflow Scheduler
   airflow-scheduler:
-    image: apache/airflow:2.7.1
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
     container_name: airflow-scheduler
     command: scheduler
     depends_on:
@@ -186,7 +190,9 @@ services:
 
   # Airflow Worker
   airflow-worker:
-    image: apache/airflow:2.7.1
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
     container_name: airflow-worker
     command: celery worker
     depends_on:

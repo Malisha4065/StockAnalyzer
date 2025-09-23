@@ -1,0 +1,10 @@
+FROM apache/airflow:2.7.1
+
+USER root
+
+# Install system deps (if any future need) then python libs used in DAGs
+RUN pip install --no-cache-dir yfinance pandas pyarrow
+
+USER airflow
+
+# The default entrypoint/cmd from base image is fine; compose overrides per service.
