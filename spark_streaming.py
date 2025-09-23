@@ -1,52 +1,171 @@
-# spark_streaming.py
+# spark_streaming.py - Improved with error handling and retries
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import from_json, col, avg, window
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType
 import os
+import time
 
-spark = SparkSession.builder \
-    .appName("StockStreamProcessor") \
-    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0") \
-    .getOrCreate()
+def wait_for_hdfs_ready(spark, hdfs_namenode, max_retries=10):
+    """Wait for HDFS to be ready and out of safe mode"""
+    for attempt in range(max_retries):
+        try:
+            print(f"Attempt {attempt + 1}: Checking if HDFS is ready...")
+            
+            # Try to create the checkpoint directory
+            spark.sql(f"""
+                CREATE TABLE IF NOT EXISTS temp_test_table (id INT)
+                USING DELTA
+                LOCATION '{hdfs_namenode}/temp_test'
+            """)
+            
+            # If we get here, HDFS is ready
+            print("HDFS is ready!")
+            
+            # Clean up test table
+            try:
+                spark.sql("DROP TABLE IF EXISTS temp_test_table")
+            except:
+                pass
+                
+            return True
+            
+        except Exception as e:
+            if "SafeModeException" in str(e):
+                print(f"HDFS still in safe mode. Waiting 30 seconds... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(30)
+            else:
+                print(f"Other error: {e}")
+                time.sleep(10)
+    
+    print("HDFS did not become ready within the timeout period")
+    return False
 
-schema = StructType([
-    StructField("ticker", StringType()),
-    StructField("timestamp", StringType()),
-    StructField("price", DoubleType()),
-    StructField("volume", IntegerType())
-])
+def create_spark_session_with_retry(max_retries=5):
+    """Create Spark session with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            print(f"Creating Spark session (attempt {attempt + 1})...")
+            
+            spark = SparkSession.builder \
+                .appName("StockStreamProcessor") \
+                .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0") \
+                .config("spark.sql.adaptive.enabled", "true") \
+                .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+                .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
+                .getOrCreate()
+            
+            # Set log level to reduce noise
+            spark.sparkContext.setLogLevel("WARN")
+            
+            print("Spark session created successfully!")
+            return spark
+            
+        except Exception as e:
+            print(f"Failed to create Spark session: {e}")
+            if attempt < max_retries - 1:
+                print(f"Retrying in 10 seconds...")
+                time.sleep(10)
+            else:
+                raise
+    
+    return None
 
-# Use environment variables for configuration
-kafka_servers = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
-hdfs_namenode = os.getenv('HDFS_NAMENODE', 'hdfs://localhost:9000')
+def main():
+    print("Starting Stock Stream Processor...")
+    
+    # Configuration from environment variables
+    kafka_servers = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+    hdfs_namenode = os.getenv('HDFS_NAMENODE', 'hdfs://localhost:9000')
+    
+    print(f"Kafka servers: {kafka_servers}")
+    print(f"HDFS namenode: {hdfs_namenode}")
+    
+    # Create Spark session with retry
+    spark = create_spark_session_with_retry()
+    if not spark:
+        print("Failed to create Spark session. Exiting.")
+        return
+    
+    # Wait for HDFS to be ready
+    if not wait_for_hdfs_ready(spark, hdfs_namenode):
+        print("HDFS is not ready. Please check HDFS status and try again.")
+        print("You can manually exit safe mode with: docker compose exec namenode hdfs dfsadmin -safemode leave")
+        return
+    
+    try:
+        # Define schema for incoming JSON data
+        schema = StructType([
+            StructField("ticker", StringType()),
+            StructField("timestamp", StringType()),
+            StructField("price", DoubleType()),
+            StructField("volume", IntegerType())
+        ])
+        
+        print("Reading from Kafka...")
+        
+        # Read from Kafka with error handling
+        df = spark.readStream \
+            .format("kafka") \
+            .option("kafka.bootstrap.servers", kafka_servers) \
+            .option("subscribe", "stock_ticks") \
+            .option("startingOffsets", "latest") \
+            .option("failOnDataLoss", "false") \
+            .load()
+        
+        print("Processing JSON data...")
+        
+        # Deserialize JSON with error handling
+        json_df = df.selectExpr("CAST(value AS STRING) as json_string") \
+            .select(from_json(col("json_string"), schema).alias("data")) \
+            .select("data.*") \
+            .filter(col("ticker").isNotNull() & col("price").isNotNull())
+        
+        # Moving average (5-minute window) with watermark
+        print("Creating aggregation...")
+        agg_df = json_df \
+            .withColumn("timestamp", col("timestamp").cast("timestamp")) \
+            .withWatermark("timestamp", "10 minutes") \
+            .groupBy(
+                window(col("timestamp"), "5 minutes"),
+                col("ticker")
+            ).agg(
+                avg("price").alias("avg_price"),
+                avg("volume").alias("avg_volume")
+            )
+        
+        # Create directories if they don't exist
+        print("Ensuring HDFS directories exist...")
+        try:
+            # These commands will be executed by the Spark driver
+            spark.sql(f"CREATE DATABASE IF NOT EXISTS stock_data")
+        except Exception as e:
+            print(f"Warning: Could not create database: {e}")
+        
+        # Write to HDFS in Parquet format
+        print("Starting streaming query...")
+        query = agg_df.writeStream \
+            .outputMode("append") \
+            .format("parquet") \
+            .option("path", f"{hdfs_namenode}/stock_data/stream") \
+            .option("checkpointLocation", f"{hdfs_namenode}/stock_data/checkpoint") \
+            .trigger(processingTime='30 seconds') \
+            .start()
+        
+        print("Streaming query started successfully!")
+        print(f"Writing data to: {hdfs_namenode}/stock_data/stream")
+        print(f"Checkpoint location: {hdfs_namenode}/stock_data/checkpoint")
+        print("Press Ctrl+C to stop...")
+        
+        # Keep the application running
+        query.awaitTermination()
+        
+    except Exception as e:
+        print(f"Error in streaming application: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print("Stopping Spark session...")
+        spark.stop()
 
-# Read from Kafka
-df = spark.readStream \
-    .format("kafka") \
-    .option("kafka.bootstrap.servers", kafka_servers) \
-    .option("subscribe", "stock_ticks") \
-    .load()
-
-# Deserialize JSON
-json_df = df.selectExpr("CAST(value AS STRING)") \
-    .select(from_json(col("value"), schema).alias("data")) \
-    .select("data.*")
-
-# Moving average (5-minute window) with watermark so aggregation can use append mode
-agg_df = json_df \
-    .withColumn("timestamp", col("timestamp").cast("timestamp")) \
-    .withWatermark("timestamp", "10 minutes") \
-    .groupBy(
-        window(col("timestamp"), "5 minutes"),
-        col("ticker")
-    ).agg(avg("price").alias("avg_price"))
-
-# Write to HDFS in Parquet
-query = agg_df.writeStream \
-    .outputMode("append") \
-    .format("parquet") \
-    .option("path", f"{hdfs_namenode}/stock_data/stream") \
-    .option("checkpointLocation", f"{hdfs_namenode}/stock_data/checkpoint") \
-    .start()
-
-query.awaitTermination()
+if __name__ == "__main__":
+    main()
