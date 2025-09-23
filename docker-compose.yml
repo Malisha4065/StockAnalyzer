@@ -241,6 +241,8 @@ services:
       - SPARK_MASTER_URL=spark://spark-master:7077
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - HDFS_NAMENODE=hdfs://namenode:9000
+      # Set to 1 to force a fresh checkpoint (will move old checkpoint aside)
+      - FRESH_RUN=0
     volumes:
       - ./:/app
     command: ["spark-submit", "--master", "spark://spark-master:7077", "--packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0", "/app/spark_streaming.py"]

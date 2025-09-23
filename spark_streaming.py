@@ -5,6 +5,8 @@ from pyspark.sql.types import StructType, StructField, StringType, DoubleType, I
 import os
 import time
 import subprocess
+import shutil
+import uuid
 
 def wait_for_hdfs_ready(hdfs_namenode, max_retries=15):
     """Poll HDFS safemode status and force leave if stuck."""
@@ -139,26 +141,49 @@ def main():
         except Exception as e:
             print(f"Warning: could not pre-create directory: {e}")
         
-        # Write to HDFS in Parquet format (fallback to local if HDFS fails)
-        print("Starting streaming query...")
+        # Determine primary output + checkpoint
+        checkpoint_base = f"{hdfs_namenode}/stock_data/checkpoint"
+        output_base = f"{hdfs_namenode}/stock_data/stream"
+        fresh_run = os.getenv("FRESH_RUN", "0") == "1"
+
+        print(f"FRESH_RUN={fresh_run}")
+
+        # If fresh run requested, rename old checkpoint path to avoid corruption reuse
+        if fresh_run:
+            try:
+                print("Attempting to move old checkpoint directory (if exists) to backup...")
+                # Use 'hdfs dfs -mv' (ignore errors if not exists)
+                subprocess.call(["hdfs", "dfs", "-mv", checkpoint_base, f"{checkpoint_base}_bak_{int(time.time())}"])
+            except Exception as e:
+                print(f"Could not move old checkpoint: {e}")
+
+        print("Starting streaming query (with stateful aggregation)...")
+
+        def start_query(chkpt, path):
+            return (agg_df.writeStream
+                    .outputMode("append")
+                    .format("parquet")
+                    .option("path", path)
+                    .option("checkpointLocation", chkpt)
+                    .trigger(processingTime='30 seconds')
+                    .start())
+
         try:
-            query = agg_df.writeStream \
-                .outputMode("append") \
-                .format("parquet") \
-                .option("path", f"{hdfs_namenode}/stock_data/stream") \
-                .option("checkpointLocation", f"{hdfs_namenode}/stock_data/checkpoint") \
-                .trigger(processingTime='30 seconds') \
-                .start()
-        except Exception as hdfs_error:
-            print(f"HDFS write failed: {hdfs_error}")
-            print("Falling back to local filesystem...")
-            query = agg_df.writeStream \
-                .outputMode("append") \
-                .format("parquet") \
-                .option("path", "/app/data/stream") \
-                .option("checkpointLocation", "/app/data/checkpoint") \
-                .trigger(processingTime='30 seconds') \
-                .start()
+            query = start_query(checkpoint_base, output_base)
+        except Exception as primary_err:
+            print(f"Primary checkpoint failed: {primary_err}")
+            alt_checkpoint = f"{checkpoint_base}_alt_{uuid.uuid4().hex}"
+            print(f"Retrying with fresh checkpoint: {alt_checkpoint}")
+            try:
+                query = start_query(alt_checkpoint, output_base)
+            except Exception as second_err:
+                print(f"Second attempt failed: {second_err}")
+                print("Falling back to LOCAL filesystem (non-HDFS) output.")
+                local_cp = "/app/data/checkpoint"
+                local_out = "/app/data/stream"
+                os.makedirs(local_cp, exist_ok=True)
+                os.makedirs(local_out, exist_ok=True)
+                query = start_query(local_cp, local_out)
         
         print("Streaming query started successfully!")
         print(f"Writing data to: {hdfs_namenode}/stock_data/stream")
