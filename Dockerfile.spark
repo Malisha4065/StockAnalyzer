@@ -1,0 +1,13 @@
+# Dockerfile for Spark applications
+FROM bitnami/spark:3.4
+
+USER root
+
+# Install Python packages needed for Spark jobs
+RUN pip install yfinance pandas pyarrow
+
+# Copy Spark scripts
+COPY spark_streaming.py /app/
+COPY spark_batch.py /app/
+
+USER 1001

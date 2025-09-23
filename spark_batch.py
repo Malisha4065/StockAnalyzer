@@ -1,11 +1,14 @@
 # spark_batch.py
 from pyspark.sql import SparkSession
+import os
 
 spark = SparkSession.builder \
     .appName("StockBatchAnalysis") \
     .getOrCreate()
 
-df = spark.read.parquet("hdfs://localhost:9000/stock_data/batch")
+# Use environment variable for HDFS namenode
+hdfs_namenode = os.getenv('HDFS_NAMENODE', 'hdfs://localhost:9000')
+df = spark.read.parquet(f"{hdfs_namenode}/stock_data/batch")
 
 df.createOrReplaceTempView("stocks")
 

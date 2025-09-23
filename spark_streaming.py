@@ -2,9 +2,11 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import from_json, col, avg, window
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType
+import os
 
 spark = SparkSession.builder \
     .appName("StockStreamProcessor") \
+    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0") \
     .getOrCreate()
 
 schema = StructType([
@@ -14,10 +16,14 @@ schema = StructType([
     StructField("volume", IntegerType())
 ])
 
+# Use environment variables for configuration
+kafka_servers = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+hdfs_namenode = os.getenv('HDFS_NAMENODE', 'hdfs://localhost:9000')
+
 # Read from Kafka
 df = spark.readStream \
     .format("kafka") \
-    .option("kafka.bootstrap.servers", "localhost:9092") \
+    .option("kafka.bootstrap.servers", kafka_servers) \
     .option("subscribe", "stock_ticks") \
     .load()
 
@@ -38,8 +44,8 @@ agg_df = json_df \
 query = agg_df.writeStream \
     .outputMode("append") \
     .format("parquet") \
-    .option("path", "hdfs://localhost:9000/stock_data/stream") \
-    .option("checkpointLocation", "hdfs://localhost:9000/stock_data/checkpoint") \
+    .option("path", f"{hdfs_namenode}/stock_data/stream") \
+    .option("checkpointLocation", f"{hdfs_namenode}/stock_data/checkpoint") \
     .start()
 
 query.awaitTermination()
