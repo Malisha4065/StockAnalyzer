@@ -1,11 +1,14 @@
-FROM apache/airflow:2.7.1
+FROM apache/airflow:2.7.1-python3.11
 
+ARG AIRFLOW_VERSION=2.7.1
+ARG PYTHON_MAJOR_MINOR=3.11
 USER airflow
 
 COPY airflow-requirements.txt /tmp/airflow-requirements.txt
-RUN pip install --no-cache-dir -r /tmp/airflow-requirements.txt
+RUN pip install --no-cache-dir \
+	--constraint https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_MAJOR_MINOR}.txt \
+	-r /tmp/airflow-requirements.txt
 
-# (Optional) remove temp file
 RUN rm /tmp/airflow-requirements.txt || true
 
-# Base image entrypoint/cmd retained; docker-compose supplies command.
+# Base image entrypoint/cmd retained.
