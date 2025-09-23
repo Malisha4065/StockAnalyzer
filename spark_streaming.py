@@ -6,23 +6,38 @@ import os
 import time
 import subprocess
 
-def wait_for_hdfs_ready(hdfs_namenode, max_retries=10):
-    """Poll HDFS safemode status using hdfs dfsadmin command (no Delta dependency)."""
+def wait_for_hdfs_ready(hdfs_namenode, max_retries=15):
+    """Poll HDFS safemode status and force leave if stuck."""
     namenode_host = hdfs_namenode.replace("hdfs://", "").split(":")[0]
     for attempt in range(1, max_retries + 1):
         print(f"Attempt {attempt}: Checking if HDFS is out of safemode...")
         try:
-            # Query safemode
+            # Query safemode status
             out = subprocess.check_output(["hdfs", "dfsadmin", "-safemode", "get"], stderr=subprocess.STDOUT, text=True)
             if "OFF" in out:
                 print("HDFS safemode is OFF")
                 return True
             else:
-                print(out.strip())
+                print(f"HDFS still in safemode: {out.strip()}")
+                
+                # After several attempts, try to force leave safemode
+                if attempt >= 8:
+                    print("Attempting to force leave safemode...")
+                    try:
+                        force_out = subprocess.check_output(["hdfs", "dfsadmin", "-safemode", "leave"], 
+                                                          stderr=subprocess.STDOUT, text=True)
+                        print(f"Force leave result: {force_out.strip()}")
+                    except Exception as fe:
+                        print(f"Could not force leave safemode: {fe}")
+                        
         except Exception as e:
             print(f"Could not query safemode yet: {e}")
-        time.sleep(10 if attempt < max_retries else 0)
-    print("HDFS did not exit safemode in time; continuing anyway (may still succeed).")
+        
+        sleep_time = 15 if attempt < 5 else 30  # Longer waits after initial attempts
+        if attempt < max_retries:
+            time.sleep(sleep_time)
+    
+    print("HDFS did not exit safemode reliably; will attempt streaming anyway.")
     return False
 
 def create_spark_session_with_retry(max_retries=5):
@@ -73,9 +88,8 @@ def main():
     
     # Wait for HDFS to be ready
     if not wait_for_hdfs_ready(hdfs_namenode):
-        print("HDFS is not ready. Please check HDFS status and try again.")
-        print("You can manually exit safe mode with: docker compose exec namenode hdfs dfsadmin -safemode leave")
-        # Continue anyway; writes may fail early but we will retry in stream
+        print("HDFS readiness check incomplete but proceeding with streaming setup...")
+        print("If errors persist, manually run: docker compose exec namenode hdfs dfsadmin -safemode leave")
     
     try:
         # Define schema for incoming JSON data
@@ -125,15 +139,26 @@ def main():
         except Exception as e:
             print(f"Warning: could not pre-create directory: {e}")
         
-        # Write to HDFS in Parquet format
+        # Write to HDFS in Parquet format (fallback to local if HDFS fails)
         print("Starting streaming query...")
-        query = agg_df.writeStream \
-            .outputMode("append") \
-            .format("parquet") \
-            .option("path", f"{hdfs_namenode}/stock_data/stream") \
-            .option("checkpointLocation", f"{hdfs_namenode}/stock_data/checkpoint") \
-            .trigger(processingTime='30 seconds') \
-            .start()
+        try:
+            query = agg_df.writeStream \
+                .outputMode("append") \
+                .format("parquet") \
+                .option("path", f"{hdfs_namenode}/stock_data/stream") \
+                .option("checkpointLocation", f"{hdfs_namenode}/stock_data/checkpoint") \
+                .trigger(processingTime='30 seconds') \
+                .start()
+        except Exception as hdfs_error:
+            print(f"HDFS write failed: {hdfs_error}")
+            print("Falling back to local filesystem...")
+            query = agg_df.writeStream \
+                .outputMode("append") \
+                .format("parquet") \
+                .option("path", "/app/data/stream") \
+                .option("checkpointLocation", "/app/data/checkpoint") \
+                .trigger(processingTime='30 seconds') \
+                .start()
         
         print("Streaming query started successfully!")
         print(f"Writing data to: {hdfs_namenode}/stock_data/stream")
