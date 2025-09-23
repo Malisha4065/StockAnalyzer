@@ -4,40 +4,25 @@ from pyspark.sql.functions import from_json, col, avg, window
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType
 import os
 import time
+import subprocess
 
-def wait_for_hdfs_ready(spark, hdfs_namenode, max_retries=10):
-    """Wait for HDFS to be ready and out of safe mode"""
-    for attempt in range(max_retries):
+def wait_for_hdfs_ready(hdfs_namenode, max_retries=10):
+    """Poll HDFS safemode status using hdfs dfsadmin command (no Delta dependency)."""
+    namenode_host = hdfs_namenode.replace("hdfs://", "").split(":")[0]
+    for attempt in range(1, max_retries + 1):
+        print(f"Attempt {attempt}: Checking if HDFS is out of safemode...")
         try:
-            print(f"Attempt {attempt + 1}: Checking if HDFS is ready...")
-            
-            # Try to create the checkpoint directory
-            spark.sql(f"""
-                CREATE TABLE IF NOT EXISTS temp_test_table (id INT)
-                USING DELTA
-                LOCATION '{hdfs_namenode}/temp_test'
-            """)
-            
-            # If we get here, HDFS is ready
-            print("HDFS is ready!")
-            
-            # Clean up test table
-            try:
-                spark.sql("DROP TABLE IF EXISTS temp_test_table")
-            except:
-                pass
-                
-            return True
-            
-        except Exception as e:
-            if "SafeModeException" in str(e):
-                print(f"HDFS still in safe mode. Waiting 30 seconds... (attempt {attempt + 1}/{max_retries})")
-                time.sleep(30)
+            # Query safemode
+            out = subprocess.check_output(["hdfs", "dfsadmin", "-safemode", "get"], stderr=subprocess.STDOUT, text=True)
+            if "OFF" in out:
+                print("HDFS safemode is OFF")
+                return True
             else:
-                print(f"Other error: {e}")
-                time.sleep(10)
-    
-    print("HDFS did not become ready within the timeout period")
+                print(out.strip())
+        except Exception as e:
+            print(f"Could not query safemode yet: {e}")
+        time.sleep(10 if attempt < max_retries else 0)
+    print("HDFS did not exit safemode in time; continuing anyway (may still succeed).")
     return False
 
 def create_spark_session_with_retry(max_retries=5):
@@ -87,10 +72,10 @@ def main():
         return
     
     # Wait for HDFS to be ready
-    if not wait_for_hdfs_ready(spark, hdfs_namenode):
+    if not wait_for_hdfs_ready(hdfs_namenode):
         print("HDFS is not ready. Please check HDFS status and try again.")
         print("You can manually exit safe mode with: docker compose exec namenode hdfs dfsadmin -safemode leave")
-        return
+        # Continue anyway; writes may fail early but we will retry in stream
     
     try:
         # Define schema for incoming JSON data
@@ -133,13 +118,12 @@ def main():
                 avg("volume").alias("avg_volume")
             )
         
-        # Create directories if they don't exist
-        print("Ensuring HDFS directories exist...")
+        # Ensure target directories exist using a simple filesystem touch via DataFrame write
+        print("Ensuring HDFS directories exist (parquet path)...")
         try:
-            # These commands will be executed by the Spark driver
-            spark.sql(f"CREATE DATABASE IF NOT EXISTS stock_data")
+            spark.range(0,1).write.mode("ignore").parquet(f"{hdfs_namenode}/stock_data/_init_tmp")
         except Exception as e:
-            print(f"Warning: Could not create database: {e}")
+            print(f"Warning: could not pre-create directory: {e}")
         
         # Write to HDFS in Parquet format
         print("Starting streaming query...")
