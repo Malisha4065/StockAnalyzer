@@ -1,5 +1,6 @@
 # dags/stock_batch_dag.py
 from airflow import DAG
+from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
 import yfinance as yf
@@ -72,8 +73,22 @@ with DAG(
     catchup=False,
     description="Fetch AAPL stock data and store in HDFS"
 ) as dag:
+    wait_for_hdfs = BashOperator(
+        task_id='wait_for_hdfs',
+        bash_command="""
+        echo "Waiting for HDFS to exit safemode..."
+        until docker compose exec namenode hdfs dfsadmin -safemode get | grep "Safe mode is OFF"; do
+          echo "HDFS is still in safemode, waiting 10 seconds..."
+          sleep 10
+        done
+        echo "HDFS is ready."
+        """,
+    )
 
-    task = PythonOperator(
+    fetch_and_store = PythonOperator(
         task_id="fetch_and_store_data",
         python_callable=fetch_and_store
     )
+
+    wait_for_hdfs >> fetch_and_store
+    
