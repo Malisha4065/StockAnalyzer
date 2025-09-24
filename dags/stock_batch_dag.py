@@ -77,9 +77,11 @@ with DAG(
         task_id='wait_for_hdfs',
         bash_command="""
         echo "Waiting for HDFS to exit safemode..."
-        until docker compose exec namenode hdfs dfsadmin -safemode get | grep "Safe mode is OFF"; do
-          echo "HDFS is still in safemode, waiting 10 seconds..."
-          sleep 10
+        # Use curl to check the NameNode's JMX endpoint for the Safemode status.
+        # When safemode is OFF, the JSON value for "Safemode" is an empty string "".
+        until curl -s http://namenode:9870/jmx?qry=Hadoop:service=NameNode,name=NameNodeInfo | grep -q '"Safemode" : ""'; do
+        echo "HDFS is still in safemode, waiting 10 seconds..."
+        sleep 10
         done
         echo "HDFS is ready."
         """,
