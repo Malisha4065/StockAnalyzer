@@ -4,7 +4,7 @@ FROM python:3.9-slim
 WORKDIR /app
 
 # Install required Python packages
-RUN pip install kafka-python alpha_vantage pandas
+RUN pip install kafka-python alpha_vantage pandas redis
 
 # Copy the producer script
 COPY producer.py /app/

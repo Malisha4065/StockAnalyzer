@@ -1,0 +1,11 @@
+# Dockerfile.trading
+FROM python:3.9-slim
+
+# Install required packages
+RUN pip install redis psycopg2-binary pandas numpy
+
+# Set working directory
+WORKDIR /app
+
+# Keep container running
+CMD ["tail", "-f", "/dev/null"]

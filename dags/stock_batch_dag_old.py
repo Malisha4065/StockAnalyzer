@@ -197,43 +197,29 @@ with DAG(
     description="HFT Daily Analytics and Optimization Pipeline",
     tags=["hft", "analytics", "batch"]
 ) as dag:
-    
-    # Task 1: Wait for HDFS to be ready (inherited from original)
+    default_args=default_args,
+    schedule_interval="@daily",
+    catchup=False,
+    description="Fetch AAPL stock data and store in HDFS"
+) as dag:
     wait_for_hdfs = BashOperator(
         task_id='wait_for_hdfs',
         bash_command="""
         echo "Waiting for HDFS to exit safemode..."
+        # Use curl to check the NameNode's JMX endpoint for the Safemode status.
+        # When safemode is OFF, the JSON value for "Safemode" is an empty string "".
         until curl -s http://namenode:9870/jmx?qry=Hadoop:service=NameNode,name=NameNodeInfo | grep -q '"Safemode" : ""'; do
-            echo "HDFS is still in safemode, waiting 10 seconds..."
-            sleep 10
+        echo "HDFS is still in safemode, waiting 10 seconds..."
+        sleep 10
         done
         echo "HDFS is ready."
         """,
     )
-    
-    # Task 2: Run batch analytics and optimization
-    run_analytics = PythonOperator(
-        task_id="run_batch_analytics",
-        python_callable=run_batch_analytics
+
+    fetch_and_store = PythonOperator(
+        task_id="fetch_and_store_data",
+        python_callable=fetch_and_store
     )
+
+    wait_for_hdfs >> fetch_and_store
     
-    # Task 3: Update trading parameters from analytics results
-    update_params = PythonOperator(
-        task_id="update_trading_parameters",
-        python_callable=update_trading_parameters
-    )
-    
-    # Task 4: Generate performance report
-    generate_report = PythonOperator(
-        task_id="generate_performance_report",
-        python_callable=generate_performance_report
-    )
-    
-    # Task 5: Cleanup old data
-    cleanup = PythonOperator(
-        task_id="cleanup_old_data",
-        python_callable=cleanup_old_data
-    )
-    
-    # Define task dependencies
-    wait_for_hdfs >> run_analytics >> [update_params, generate_report] >> cleanup

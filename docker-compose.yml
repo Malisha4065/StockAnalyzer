@@ -110,7 +110,7 @@ services:
     depends_on:
       - spark-master
 
-  # PostgreSQL for Airflow
+  # PostgreSQL for Airflow AND Analytics
   postgres:
     image: postgres:13
     container_name: postgres
@@ -120,15 +120,19 @@ services:
       POSTGRES_DB: airflow
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5432:5432"
 
-  # Redis for Airflow
+  # Redis for Airflow AND Trading Signals (HFT Cache)
   redis:
     image: redis:7.2-bookworm
     container_name: redis
-    expose:
-      - 6379
+    ports:
+      - "6379:6379"  # Expose for trading system access
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
 
   # Airflow Webserver
   airflow-webserver:
@@ -216,7 +220,7 @@ services:
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
 
-  # Stock Data Producer
+  # Stock Data Producer (Real-time Market Data Feed)
   stock-producer:
     build:
       context: .
@@ -224,14 +228,16 @@ services:
     container_name: stock-producer
     depends_on:
       - kafka
+      - redis
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_URL=redis://redis:6379/0
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}
     volumes:
       - ./:/app
     restart: always
 
-  # Spark Streaming Job
+  # Spark Streaming Job (Real-time Signal Generation)
   spark-streaming:
     build:
       context: .
@@ -241,15 +247,34 @@ services:
       - spark-master
       - kafka
       - namenode
+      - redis
     environment:
       - SPARK_MASTER_URL=spark://spark-master:7077
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - HDFS_NAMENODE=hdfs://namenode:9000
+      - REDIS_URL=redis://redis:6379/1
       # Set to 1 to force a fresh checkpoint (will move old checkpoint aside)
       - FRESH_RUN=0
     volumes:
       - ./:/app
     command: ["spark-submit", "--master", "spark://spark-master:7077", "--packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0", "/app/spark_streaming.py"]
+
+  # Trading System (Executes trades based on signals)
+  trading-system:
+    build:
+      context: .
+      dockerfile: Dockerfile.trading
+    container_name: trading-system
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      - REDIS_URL=redis://redis:6379/1
+      - POSTGRES_URL=postgresql://airflow:airflow@postgres:5432/airflow
+    volumes:
+      - ./:/app
+    restart: always
+    command: ["python", "/app/trading_system.py"]
 
 volumes:
   zookeeper-data:
@@ -259,3 +284,4 @@ volumes:
   hadoop_datanode:
   spark-logs:
   postgres-db-volume:
+  redis-data:

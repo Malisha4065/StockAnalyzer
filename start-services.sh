@@ -14,9 +14,9 @@ chmod -R 777 logs plugins || true
 echo "[+] Build phase"
 if [ "$FULL_REBUILD" -eq 1 ]; then
 	echo "[+] Performing full rebuild (no cache, pull latest)"
-	docker compose build --no-cache --pull airflow-webserver airflow-scheduler airflow-worker stock-producer spark-streaming
+	docker compose build --no-cache --pull airflow-webserver airflow-scheduler airflow-worker stock-producer spark-streaming trading-system
 else
-	docker compose build airflow-webserver airflow-scheduler airflow-worker stock-producer spark-streaming
+	docker compose build airflow-webserver airflow-scheduler airflow-worker stock-producer spark-streaming trading-system
 fi
 
 echo "[+] Starting core infrastructure (ZK, Kafka, DB, Hadoop, Redis)"
@@ -36,6 +36,28 @@ for i in {1..15}; do
 	fi
 	sleep 2
 	[ $i -eq 15 ] && echo "[!] Kafka readiness timeout (continuing)"
+done
+
+# Redis readiness check
+echo "[+] Checking Redis readiness"
+for i in {1..10}; do
+	if docker compose exec -T redis redis-cli ping | grep -q "PONG"; then
+		echo "[+] Redis is ready."
+		break
+	fi
+	sleep 2
+	[ $i -eq 10 ] && echo "[!] Redis readiness timeout (continuing)"
+done
+
+# PostgreSQL readiness (for HFT analytics)
+echo "[+] Checking PostgreSQL readiness"
+for i in {1..15}; do
+	if docker compose exec -T postgres pg_isready -U airflow >/dev/null 2>&1; then
+		echo "[+] PostgreSQL is ready."
+		break
+	fi
+	sleep 2
+	[ $i -eq 15 ] && echo "[!] PostgreSQL readiness timeout (continuing)"
 done
 
 # HDFS preparation
@@ -83,24 +105,80 @@ else
 	echo "[+] Admin user already present."
 fi
 
-echo "[+] Starting data processing services (producer, streaming)"
-docker compose up -d stock-producer spark-streaming
+echo "[+] Starting data processing services (producer, streaming, trading system)"
+docker compose up -d stock-producer spark-streaming trading-system
+
+echo "[+] Verifying HFT pipeline components..."
+if [ "$FAST_MODE" -eq 0 ]; then
+	sleep 5
+	echo "[+] Checking HFT pipeline health:"
+	
+	# Check if trading system started
+	if docker compose ps trading-system | grep -q "Up"; then
+		echo "    ✅ Trading System: Running"
+	else
+		echo "    ❌ Trading System: Not running"
+	fi
+	
+	# Check Redis databases
+	if docker compose exec -T redis redis-cli -n 0 ping | grep -q "PONG"; then
+		echo "    ✅ Redis DB 0 (Price Cache): Ready"
+	fi
+	
+	if docker compose exec -T redis redis-cli -n 1 ping | grep -q "PONG"; then
+		echo "    ✅ Redis DB 1 (Signals): Ready"
+	fi
+	
+	# Check PostgreSQL HFT tables
+	if docker compose exec -T postgres psql -U airflow -d airflow -c "\dt" 2>/dev/null | grep -q "trading_params"; then
+		echo "    ✅ PostgreSQL HFT Schema: Initialized"
+	else
+		echo "    ⚠️  PostgreSQL HFT Schema: May be initializing..."
+	fi
+fi
 
 echo "[+] Summarizing container status"
 docker compose ps
 
-echo ""; echo "All services started!"; echo ""
-echo "Access URLs:"
+echo ""; echo "🚀 HFT PIPELINE STARTED! 🚀"; echo ""
+echo "📊 Access URLs:"
 echo "- Spark Master UI: http://localhost:8080"
 echo "- Spark Worker UI: http://localhost:8081"
 echo "- Airflow UI: http://localhost:8082 (admin/admin)"
 echo "- Hadoop NameNode UI: http://localhost:9870" 
 echo "" 
-echo "Feature flags (export before running):" 
+echo "🔧 HFT Monitoring Commands:"
+echo "  # Watch trading system activity"
+echo "  docker logs -f trading-system"
+echo ""
+echo "  # Check live prices in Redis"
+echo "  docker exec -it redis redis-cli -n 0"
+echo "  > HGETALL live_prices:AAPL"
+echo ""
+echo "  # Check trading signals"
+echo "  docker exec -it redis redis-cli -n 1"
+echo "  > GET signals:AAPL"
+echo "  > LRANGE signal_history 0 10"
+echo ""
+echo "  # View trades in PostgreSQL"
+echo "  docker exec -it postgres psql -U airflow -d airflow"
+echo "  postgres=# SELECT * FROM trades ORDER BY timestamp DESC LIMIT 10;"
+echo ""
+echo "  # Test HFT pipeline"
+echo "  python test_hft_pipeline.py"
+echo "" 
+echo "⚙️  Feature flags (export before running):" 
 echo "  FAST_MODE=1                # Skip waits" 
 echo "  FULL_REBUILD=1             # Force no-cache rebuild of custom images" 
 echo "  FRESH_RUN=1                # Rotate streaming checkpoint state" 
 echo "  FORCE_LEAVE_SAFE_MODE=1    # Force HDFS out of safemode early" 
+echo "" 
+echo "📈 Data Flow:"
+echo "  Real-time: Market Data → Kafka → Spark → Redis → Trading System"
+echo "  Batch:     HDFS → Spark Batch → PostgreSQL (Daily at 2 AM)"
+echo ""
+echo "🧪 Quick Test:"
+echo "  python test_hft_pipeline.py"
 echo "" 
 echo "Helper commands:" 
 echo "  docker compose logs -f spark-streaming" 
@@ -111,4 +189,4 @@ echo ""
 echo "Example (fresh clean run):" 
 echo "  FRESH_RUN=1 FULL_REBUILD=1 bash start-services.sh" 
 echo "" 
-echo "Done."
+echo "🎯 Your HFT pipeline is ready for algorithmic trading simulation!"
