@@ -12,6 +12,27 @@ api_key = os.getenv('ALPHA_VANTAGE_API_KEY')
 if not api_key:
     raise ValueError("ALPHA_VANTAGE_API_KEY environment variable is required")
 
+# Wait for Kafka to be available
+def wait_for_kafka():
+    from kafka import KafkaAdminClient
+    from kafka.errors import NoBrokersAvailable
+    max_retries = 30
+    retry_count = 0
+    while retry_count < max_retries:
+        try:
+            admin_client = KafkaAdminClient(bootstrap_servers=bootstrap_servers)
+            admin_client.close()
+            print("Kafka is available!")
+            return True
+        except NoBrokersAvailable:
+            print(f"Waiting for Kafka... (attempt {retry_count + 1}/{max_retries})")
+            time.sleep(2)
+            retry_count += 1
+    raise Exception("Kafka not available after maximum retries")
+
+# Wait for Kafka before proceeding
+wait_for_kafka()
+
 producer = KafkaProducer(
     bootstrap_servers=bootstrap_servers,
     value_serializer=lambda v: json.dumps(v).encode("utf-8")
