@@ -3,7 +3,7 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
-import yfinance as yf
+from alpha_vantage.timeseries import TimeSeries
 import tempfile
 import pandas as pd
 import pyarrow as pa
@@ -21,54 +21,69 @@ HDFS_PATH = "/stock_data/batch"
 
 def fetch_and_store():
     """
-    Fetches stock data using yfinance with a temporary cache,
+    Fetches stock data using Alpha Vantage API,
     and stores it as a Parquet file in HDFS.
     """
     try:
-        # Create a temporary directory that is unique to this task run
-        with tempfile.TemporaryDirectory() as temp_cache_dir:
-            # Tell yfinance to use this temporary directory for its cache
-            yf.set_tz_cache_location(temp_cache_dir)
+        # Get Alpha Vantage API key from environment variable
+        api_key = os.getenv('ALPHA_VANTAGE_API_KEY')
+        if not api_key:
+            raise ValueError("ALPHA_VANTAGE_API_KEY environment variable is required")
 
-            log.info("Fetching AAPL stock data...")
-            ticker = yf.Ticker("AAPL")
-            df = ticker.history(period="1mo", interval="1d")
+        # Initialize Alpha Vantage TimeSeries
+        ts = TimeSeries(key=api_key, output_format='pandas')
 
-            if df.empty:
-                raise ValueError("No data retrieved from yfinance for AAPL")
+        log.info("Fetching AAPL stock data from Alpha Vantage...")
+        # Fetch daily time series data
+        data, meta_data = ts.get_daily(symbol='AAPL', outputsize='compact')
 
-            log.info(f"Retrieved {len(df)} records")
+        if data.empty:
+            raise ValueError("No data retrieved from Alpha Vantage for AAPL")
 
-            # Convert to parquet in memory
-            table = pa.Table.from_pandas(df.reset_index())
-            buffer = io.BytesIO()
-            pq.write_table(table, buffer)
-            buffer.seek(0)
+        log.info(f"Retrieved {len(data)} records")
 
-            # Create directory in HDFS if it doesn't exist
-            dir_url = f"{HDFS_NAMENODE_URL}{HDFS_PATH}?op=MKDIRS"
-            response = requests.put(dir_url)
-            log.info(f"HDFS directory creation response: {response.status_code}")
+        # Rename columns to match expected format
+        data = data.rename(columns={
+            '1. open': 'Open',
+            '2. high': 'High',
+            '3. low': 'Low',
+            '4. close': 'Close',
+            '5. volume': 'Volume'
+        })
 
-            # Upload file to HDFS using WebHDFS
-            filename = f"AAPL_{datetime.now().strftime('%Y-%m-%d')}.parquet"
-            upload_url = f"{HDFS_NAMENODE_URL}{HDFS_PATH}/{filename}?op=CREATE&overwrite=true"
+        # Convert volume to int
+        data['Volume'] = data['Volume'].astype(int)
 
-            # First request to get the redirect URL from the NameNode
-            response = requests.put(upload_url, allow_redirects=False)
-            if response.status_code == 307: # 307 is Temporary Redirect
-                redirect_url = response.headers['Location']
-                
-                # The second request sends the actual data to the DataNode
-                upload_response = requests.put(redirect_url, data=buffer.getvalue())
-                log.info(f"File upload response: {upload_response.status_code}")
+        # Convert to parquet in memory
+        table = pa.Table.from_pandas(data.reset_index())
+        buffer = io.BytesIO()
+        pq.write_table(table, buffer)
+        buffer.seek(0)
 
-                if upload_response.status_code == 201: # 201 means "Created"
-                    log.info(f"Successfully uploaded {filename} to HDFS")
-                else:
-                    raise Exception(f"Failed to upload file to DataNode: {upload_response.status_code} - {upload_response.text}")
+        # Create directory in HDFS if it doesn't exist
+        dir_url = f"{HDFS_NAMENODE_URL}{HDFS_PATH}?op=MKDIRS"
+        response = requests.put(dir_url)
+        log.info(f"HDFS directory creation response: {response.status_code}")
+
+        # Upload file to HDFS using WebHDFS
+        filename = f"AAPL_{datetime.now().strftime('%Y-%m-%d')}.parquet"
+        upload_url = f"{HDFS_NAMENODE_URL}{HDFS_PATH}/{filename}?op=CREATE&overwrite=true"
+
+        # First request to get the redirect URL from the NameNode
+        response = requests.put(upload_url, allow_redirects=False)
+        if response.status_code == 307: # 307 is Temporary Redirect
+            redirect_url = response.headers['Location']
+            
+            # The second request sends the actual data to the DataNode
+            upload_response = requests.put(redirect_url, data=buffer.getvalue())
+            log.info(f"File upload response: {upload_response.status_code}")
+
+            if upload_response.status_code == 201: # 201 means "Created"
+                log.info(f"Successfully uploaded {filename} to HDFS")
             else:
-                raise Exception(f"Failed to get upload URL from NameNode: {response.status_code} - {response.text}")
+                raise Exception(f"Failed to upload file to DataNode: {upload_response.status_code} - {upload_response.text}")
+        else:
+            raise Exception(f"Failed to get upload URL from NameNode: {response.status_code} - {response.text}")
 
     except Exception as e:
         log.error(f"Error in fetch_and_store: {e}")
