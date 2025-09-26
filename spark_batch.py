@@ -224,21 +224,27 @@ def main():
             if master_url.startswith("spark://"):
                 print("Polling for Spark executors (excluding driver)...")
                 start_poll = _t.time()
-                reported = set()
+                last_logged_remaining = None
+                def _current_executors():
+                    try:
+                        # Java map: keys are host:port or 'driver'
+                        jmap = sc._jsc.sc().getExecutorMemoryStatus().keySet().toArray()
+                        return [e for e in jmap if 'driver' not in str(e)]
+                    except Exception as inner:
+                        print(f"[WARN] Executor polling via memory status failed: {inner}")
+                        return []
                 while _t.time() - start_poll < preflight_timeout:
-                    infos = sc.statusTracker().getExecutorInfos()
-                    # executor ID 'driver' always present; look for others
-                    executors = [e.executorId() for e in infos if e.executorId() != 'driver']
+                    executors = _current_executors()
                     if executors:
                         print(f"Executors available: {executors}")
                         break
                     remaining = preflight_timeout - int(_t.time() - start_poll)
-                    if remaining not in reported:
-                        print(f"  Waiting for executors... {remaining}s left")
-                        reported.add(remaining)
+                    if remaining != last_logged_remaining:
+                        print(f"  Waiting for executors... {remaining}s left (0 found)")
+                        last_logged_remaining = remaining
                     _t.sleep(executor_wait_interval)
                 else:
-                    print(f"[WARN] No executors registered within {preflight_timeout}s; proceeding anyway (job may be queued until worker free)")
+                    print(f"[WARN] No executors registered within {preflight_timeout}s; proceeding anyway (jobs will queue until a worker is free)")
 
             print("Running Spark connectivity preflight (small parallelize count)...")
             _t0 = _t.time()
