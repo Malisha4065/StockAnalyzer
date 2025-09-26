@@ -114,7 +114,8 @@ def main():
             spark_max("price").alias("high"),
             spark_min("price").alias("low")
         ).withColumn("current_price", col("ma_short")) \
-         .withColumn("window_end", col("window").getField("end"))
+         .withColumn("window_end", col("window").getField("end")) \
+         .withWatermark("window_end", "2 minutes")
 
         long_window_metrics = prices_with_watermark.groupBy(
             window(col("timestamp"), "2 minutes", "5 seconds").alias("window"),
@@ -122,6 +123,7 @@ def main():
         ).agg(
             avg("price").alias("ma_long")
         ).withColumn("window_end", col("window").getField("end")) \
+         .withWatermark("window_end", "2 minutes") \
          .select("symbol", "window_end", "ma_long")
 
         signals_df = short_window_metrics.join(long_window_metrics, ["symbol", "window_end"], "left") \
