@@ -222,34 +222,22 @@ def main():
             import time as _t
             sc = spark.sparkContext
             if master_url.startswith("spark://"):
-                print("Polling for Spark executors (excluding driver)...")
-                start_poll = _t.time()
-                last_logged_remaining = None
-                def _current_executors():
-                    try:
-                        # Java map: keys are host:port or 'driver'
-                        jmap = sc._jsc.sc().getExecutorMemoryStatus().keySet().toArray()
-                        return [e for e in jmap if 'driver' not in str(e)]
-                    except Exception as inner:
-                        print(f"[WARN] Executor polling via memory status failed: {inner}")
-                        return []
-                while _t.time() - start_poll < preflight_timeout:
-                    executors = _current_executors()
-                    if executors:
-                        print(f"Executors available: {executors}")
-                        break
-                    remaining = preflight_timeout - int(_t.time() - start_poll)
-                    if remaining != last_logged_remaining:
-                        print(f"  Waiting for executors... {remaining}s left (0 found)")
-                        last_logged_remaining = remaining
-                    _t.sleep(executor_wait_interval)
-                else:
-                    print(f"[WARN] No executors registered within {preflight_timeout}s; proceeding anyway (jobs will queue until a worker is free)")
+                print("Checking Spark cluster connectivity (will timeout if no workers available)...")
+                # Skip complex executor polling - let the preflight job itself detect availability
+            else:
+                print("Using local Spark mode - no cluster polling needed")
 
             print("Running Spark connectivity preflight (small parallelize count)...")
             _t0 = _t.time()
-            preflight_count = sc.parallelize([1,2,3,4,5]).count()
-            print(f"Preflight success: count={preflight_count} latency={( _t.time()-_t0)*1000:.1f} ms")
+            try:
+                preflight_count = sc.parallelize([1,2,3,4,5]).count()
+                print(f"Preflight success: count={preflight_count} latency={( _t.time()-_t0)*1000:.1f} ms")
+            except Exception as job_err:
+                elapsed = _t.time() - _t0
+                if elapsed > 30 and master_url.startswith("spark://"):
+                    print(f"[WARN] Cluster job timed out after {elapsed:.1f}s - no workers available or overloaded")
+                    print("Consider setting BATCH_LOCAL_MODE=1 or waiting for streaming job to free resources")
+                raise
         except Exception as pre_err:
             print(f"Preflight Spark job failed early: {pre_err}")
             raise
