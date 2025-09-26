@@ -205,25 +205,37 @@ def main():
     hdfs_namenode = os.getenv('HDFS_NAMENODE', 'hdfs://localhost:9000')
     
     try:
-        # Check if HDFS data exists before trying to read
+        # Check if HDFS data exists before trying to read using Hadoop FS API for fast existence check
         print("Checking for historical signals in HDFS...")
         signals_path = f"{hdfs_namenode}/stock_data/signals"
+        hadoop_conf = spark._jsc.hadoopConfiguration()
+        from py4j.java_gateway import java_import
+        java_import(spark._jvm, "org.apache.hadoop.fs.Path")
+        java_import(spark._jvm, "org.apache.hadoop.fs.FileSystem")
+        fs = spark._jvm.FileSystem.get(hadoop_conf)
+        path_obj = spark._jvm.Path(signals_path)
+        if not fs.exists(path_obj):
+            print(f"Signals path does not exist yet: {signals_path}")
+            print("Run streaming job longer to accumulate data before analytics.")
+            return
         
-        try:
-            # Try to read the schema first to check if data exists
-            signals_df = spark.read.parquet(signals_path)
-            row_count = signals_df.count()
-            print(f"Found {row_count} historical signals in HDFS")
-            
-            if row_count == 0:
-                print("No historical data available yet. Batch analytics needs streaming data first.")
-                print("Make sure the Spark streaming job has been running to collect data.")
-                return
-                
-        except Exception as e:
-            print(f"No historical signals found in HDFS: {e}")
-            print("This is normal on first run. The streaming job needs to run first to collect data.")
-            print(f"Expected path: {signals_path}")
+        # Read signals
+        signals_df = spark.read.parquet(signals_path)
+        # Normalize/align schema if needed: streaming writes columns: symbol, signal, confidence, current_price, ma_short, ma_long, price_momentum, window
+        # Map to expected columns: symbol, action, price, timestamp
+        if 'current_price' in signals_df.columns and 'signal' in signals_df.columns:
+            from pyspark.sql.functions import col as _col
+            if 'timestamp' not in signals_df.columns and 'window' in signals_df.columns:
+                # Window is a struct with start/end; use end as representative timestamp
+                from pyspark.sql.functions import col as _col, to_timestamp
+                signals_df = signals_df.withColumn('timestamp', _col('window').getField('end'))
+            signals_df = signals_df.withColumnRenamed('signal', 'action') \
+                                   .withColumnRenamed('current_price', 'price')
+        row_count = signals_df.count()
+        print(f"Found {row_count} historical signals in HDFS after normalization")
+        MIN_ROWS = int(os.getenv('MIN_BATCH_ROWS', '50'))
+        if row_count < MIN_ROWS:
+            print(f"Insufficient data (<{MIN_ROWS} rows). Current: {row_count}. Exiting early.")
             return
         
         # Read historical price data  
