@@ -161,10 +161,13 @@ services:
       AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
       AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
       ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY}
+      SPARK_APP_DIR: /app
+      SPARK_BATCH_FILE: spark_batch.py
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
+      - ./:/app
     ports:
       - "8082:8080"
 
@@ -189,10 +192,13 @@ services:
       AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
       AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
       ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY}
+      SPARK_APP_DIR: /app
+      SPARK_BATCH_FILE: spark_batch.py
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
+      - ./:/app
 
   # Airflow Worker
   airflow-worker:
@@ -215,10 +221,13 @@ services:
       AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
       AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
       ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY}
+      SPARK_APP_DIR: /app
+      SPARK_BATCH_FILE: spark_batch.py
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
+      - ./:/app
 
   # Stock Data Producer (Real-time Market Data Feed)
   stock-producer:

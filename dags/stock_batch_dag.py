@@ -8,6 +8,8 @@ import psycopg2
 import redis
 import json
 import logging
+import os
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -15,13 +17,34 @@ def run_batch_analytics():
     """Trigger Spark batch analytics job"""
     try:
         log.info("Starting HFT batch analytics...")
+        spark_app_dir = Path(os.environ.get("SPARK_APP_DIR", "/app")).resolve()
+        spark_batch_file = os.environ.get("SPARK_BATCH_FILE", "spark_batch.py")
+        script_path = spark_app_dir / spark_batch_file
+
+        if not script_path.exists():
+            fallback_path = (Path(__file__).resolve().parent / spark_batch_file).resolve()
+            if fallback_path.exists():
+                log.warning(
+                    "Configured Spark batch script '%s' missing at %s; falling back to %s",
+                    spark_batch_file,
+                    script_path,
+                    fallback_path,
+                )
+                script_path = fallback_path
+                spark_app_dir = fallback_path.parent
+            else:
+                raise FileNotFoundError(
+                    f"Unable to locate Spark batch script. Checked {script_path} and {fallback_path}."
+                )
+        else:
+            log.info("Using Spark batch script at %s", script_path)
         
         # Run Spark batch job
         result = subprocess.run([
             "spark-submit",
             "--master", "spark://spark-master:7077",
-            "/app/spark_batch.py"
-        ], capture_output=True, text=True, cwd="/app")
+            str(script_path)
+        ], capture_output=True, text=True, cwd=str(spark_app_dir))
         
         if result.returncode == 0:
             log.info("Batch analytics completed successfully")
