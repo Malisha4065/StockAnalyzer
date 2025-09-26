@@ -229,15 +229,37 @@ def main():
 
             print("Running Spark connectivity preflight (small parallelize count)...")
             _t0 = _t.time()
+            preflight_error = None
             try:
                 preflight_count = sc.parallelize([1,2,3,4,5]).count()
                 print(f"Preflight success: count={preflight_count} latency={( _t.time()-_t0)*1000:.1f} ms")
             except Exception as job_err:
+                preflight_error = job_err
                 elapsed = _t.time() - _t0
-                if elapsed > 30 and master_url.startswith("spark://"):
-                    print(f"[WARN] Cluster job timed out after {elapsed:.1f}s - no workers available or overloaded")
-                    print("Consider setting BATCH_LOCAL_MODE=1 or waiting for streaming job to free resources")
-                raise
+                if master_url.startswith("spark://"):
+                    print(f"[WARN] Preflight failed after {elapsed:.1f}s on cluster: {job_err}")
+                else:
+                    print(f"[WARN] Preflight failed in local mode: {job_err}")
+            # Fallback if cluster preflight failed or exceeded timeout
+            if preflight_error and master_url.startswith("spark://"):
+                elapsed = _t.time() - _t0
+                if elapsed >= preflight_timeout or True:
+                    try:
+                        print("Attempting fallback: recreating Spark session in local[*] mode due to preflight failure...")
+                        spark.stop()
+                    except Exception:
+                        pass
+                    os.environ['SPARK_MASTER_URL'] = 'local[*]'
+                    spark = create_spark_session()
+                    sc = spark.sparkContext
+                    try:
+                        t2 = _t.time()
+                        preflight_count = sc.parallelize([1,2,3,4,5]).count()
+                        print(f"Local fallback preflight success: count={preflight_count} latency={( _t.time()-t2)*1000:.1f} ms")
+                        master_url = 'local[*]'
+                    except Exception as local_err:
+                        print(f"[FATAL] Local fallback preflight also failed: {local_err}")
+                        raise preflight_error
         except Exception as pre_err:
             print(f"Preflight Spark job failed early: {pre_err}")
             raise

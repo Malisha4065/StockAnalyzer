@@ -272,6 +272,8 @@ services:
       ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY}
       SPARK_APP_DIR: /app
       SPARK_BATCH_FILE: spark_batch.py
+      SPARK_DRIVER_HOST: airflow-worker
+      SPARK_DRIVER_BIND_ADDRESS: 0.0.0.0
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
