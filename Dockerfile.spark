@@ -4,7 +4,7 @@ FROM bitnami/spark:3.4
 USER root
 
 # Install Python packages needed for Spark jobs
-RUN pip install alpha_vantage pandas pyarrow
+RUN pip install alpha_vantage pandas pyarrow redis psycopg2-binary
 
 # Copy Spark scripts
 COPY spark_streaming.py /app/

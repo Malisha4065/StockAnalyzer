@@ -2,3 +2,5 @@ alpha_vantage
 pandas
 pyarrow
 requests
+redis
+psycopg2-binary
