@@ -16,6 +16,11 @@ def create_spark_session():
         .appName("HFT_Batch_Analytics")
         .master(master_url)
         .config("spark.hadoop.fs.defaultFS", hdfs_url)
+        # Encourage using hostnames for datanodes in container network
+        .config("spark.hadoop.dfs.client.use.datanode.hostname", "true")
+        .config("dfs.client.use.datanode.hostname", "true")
+        # Explicit HDFS implementation (defensive)
+        .config("spark.hadoop.fs.hdfs.impl", "org.apache.hadoop.hdfs.DistributedFileSystem")
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer"))
@@ -234,8 +239,43 @@ def main():
             print("Run streaming job longer to accumulate data before analytics.")
             return
         
-        # Read signals
-        signals_df = spark.read.parquet(signals_path)
+        # Read signals with diagnostics
+        import time
+        read_start = time.time()
+        print("Listing files under signals path before read...")
+        try:
+            status_list = fs.listStatus(path_obj)
+            files = [s.getPath().toString() for s in status_list if s.isFile() and s.getPath().getName().endswith('.parquet')]
+            meta_dirs = [s.getPath().toString() for s in status_list if not s.isFile()]
+            print(f"Found {len(files)} parquet data files; non-file entries: {meta_dirs}")
+            for f in files[:10]:
+                print("  data file:", f)
+        except Exception as e:
+            print("Error listing status before read:", e)
+
+        print("Attempting directory parquet read...")
+        try:
+            signals_df = spark.read.parquet(signals_path)
+            print(f"Directory read success in {(time.time()-read_start)*1000:.1f} ms")
+        except Exception as e:
+            print(f"Directory read failed ({e}); falling back to per-file union")
+            try:
+                dfs = []
+                for f in files:
+                    t0 = time.time()
+                    df_part = spark.read.parquet(f)
+                    dfs.append(df_part)
+                    print(f"Read {f} rows={df_part.count()} latency={(time.time()-t0)*1000:.1f} ms")
+                if dfs:
+                    from functools import reduce
+                    from pyspark.sql import DataFrame
+                    signals_df = reduce(DataFrame.unionByName, dfs)
+                else:
+                    print("No parquet data files found after fallback; exiting.")
+                    return
+            except Exception as inner:
+                print("Per-file fallback failed:", inner)
+                return
         # Normalize/align schema if needed: streaming writes columns: symbol, signal, confidence, current_price, ma_short, ma_long, price_momentum, window
         # Map to expected columns: symbol, action, price, timestamp
         if 'current_price' in signals_df.columns and 'signal' in signals_df.columns:
