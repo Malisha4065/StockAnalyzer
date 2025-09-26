@@ -214,6 +214,16 @@ def main():
     hdfs_namenode = os.getenv('HDFS_NAMENODE', 'hdfs://namenode:9000')
     
     try:
+        # Preflight: ensure Spark can execute a trivial job (isolates cluster connectivity vs HDFS issues)
+        try:
+            print("Running Spark connectivity preflight (range(1e3).count)...")
+            import time as _t
+            _t0 = _t.time()
+            preflight_count = spark.range(0, 1000).count()
+            print(f"Preflight success: count={preflight_count} latency={( _t.time()-_t0)*1000:.1f} ms")
+        except Exception as pre_err:
+            print(f"Preflight Spark job failed early: {pre_err}")
+            raise
         # Check if HDFS data exists before trying to read using Hadoop FS API for fast existence check
         print("Checking for historical signals in HDFS...")
         signals_path = f"{hdfs_namenode}/stock_data/signals"
@@ -253,29 +263,37 @@ def main():
         except Exception as e:
             print("Error listing status before read:", e)
 
-        print("Attempting directory parquet read...")
+        print("Attempting glob parquet read (part-*.parquet) to bypass metadata dir scan...")
+        glob_path = signals_path.rstrip('/') + "/part-*.parquet"
         try:
-            signals_df = spark.read.parquet(signals_path)
-            print(f"Directory read success in {(time.time()-read_start)*1000:.1f} ms")
-        except Exception as e:
-            print(f"Directory read failed ({e}); falling back to per-file union")
+            glob_start = time.time()
+            signals_df = spark.read.parquet(glob_path)
+            print(f"Glob read success in {(time.time()-glob_start)*1000:.1f} ms (pattern {glob_path})")
+        except Exception as glob_err:
+            print(f"Glob read failed ({glob_err}); attempting directory parquet read...")
             try:
-                dfs = []
-                for f in files:
-                    t0 = time.time()
-                    df_part = spark.read.parquet(f)
-                    dfs.append(df_part)
-                    print(f"Read {f} rows={df_part.count()} latency={(time.time()-t0)*1000:.1f} ms")
-                if dfs:
-                    from functools import reduce
-                    from pyspark.sql import DataFrame
-                    signals_df = reduce(DataFrame.unionByName, dfs)
-                else:
-                    print("No parquet data files found after fallback; exiting.")
+                dir_start = time.time()
+                signals_df = spark.read.parquet(signals_path)
+                print(f"Directory read success in {(time.time()-dir_start)*1000:.1f} ms")
+            except Exception as e:
+                print(f"Directory read failed ({e}); falling back to per-file union")
+                try:
+                    dfs = []
+                    for f in files:
+                        t0 = time.time()
+                        df_part = spark.read.parquet(f)
+                        dfs.append(df_part)
+                        print(f"Read {f} rows={df_part.count()} latency={(time.time()-t0)*1000:.1f} ms")
+                    if dfs:
+                        from functools import reduce
+                        from pyspark.sql import DataFrame
+                        signals_df = reduce(DataFrame.unionByName, dfs)
+                    else:
+                        print("No parquet data files found after fallback; exiting.")
+                        return
+                except Exception as inner:
+                    print("Per-file fallback failed:", inner)
                     return
-            except Exception as inner:
-                print("Per-file fallback failed:", inner)
-                return
         # Normalize/align schema if needed: streaming writes columns: symbol, signal, confidence, current_price, ma_short, ma_long, price_momentum, window
         # Map to expected columns: symbol, action, price, timestamp
         if 'current_price' in signals_df.columns and 'signal' in signals_df.columns:

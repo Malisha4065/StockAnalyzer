@@ -29,6 +29,13 @@ def run_batch_analytics():
         spark_batch_attr = os.environ.get("SPARK_BATCH_ENTRYPOINT", "main")
 
         module = import_module(spark_batch_module)
+        # Force a reload so iterative debugging changes in mounted volume are reflected
+        try:
+            import importlib
+            module = importlib.reload(module)
+            log.info("Reloaded module %s", spark_batch_module)
+        except Exception as re:
+            log.warning("Could not reload module %s: %s (continuing with initial import)", spark_batch_module, re)
         entrypoint = getattr(module, spark_batch_attr, None)
 
         if entrypoint is None:
