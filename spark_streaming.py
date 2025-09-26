@@ -153,8 +153,8 @@ def main():
                      .otherwise((-col("price_momentum") - 0.1) / 1.0))
                 .otherwise(lit(0.0))
             ) \
-            .drop("window_end") \
-            .filter(col("signal") != "HOLD")
+            .drop("window_end") #\
+            #.filter(col("signal") != "HOLD")
         
         print("Starting signal generation stream...")
         
