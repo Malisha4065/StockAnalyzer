@@ -1,5 +1,5 @@
 # Dockerfile for Spark applications
-FROM bitnami/spark:3.4.1-debian-11-r16
+FROM bitnami/spark:3.4.1-debian-11-r4
 
 USER root
 
