@@ -2,6 +2,15 @@ FROM apache/airflow:2.7.1-python3.11
 
 ARG AIRFLOW_VERSION=2.7.1
 ARG PYTHON_MAJOR_MINOR=3.11
+USER root
+
+# Install OpenJDK (required for PySpark inside Airflow containers when running Spark client code)
+RUN apt-get update && apt-get install -y --no-install-recommends openjdk-11-jre-headless wget && \
+	apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64 \
+	PATH=$PATH:/usr/lib/jvm/java-11-openjdk-amd64/bin
+
 USER airflow
 
 COPY airflow-requirements.txt /tmp/airflow-requirements.txt

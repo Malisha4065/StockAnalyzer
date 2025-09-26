@@ -10,13 +10,22 @@ from datetime import datetime, timedelta
 def create_spark_session():
     """Create Spark session optimized for batch analytics"""
     master_url = os.environ.get("SPARK_MASTER_URL", "local[*]")
-    return SparkSession.builder \
-        .appName("HFT_Batch_Analytics") \
-        .master(master_url) \
-        .config("spark.sql.adaptive.enabled", "true") \
-        .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
-        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
-        .getOrCreate()
+    builder = (SparkSession.builder
+        .appName("HFT_Batch_Analytics")
+        .master(master_url)
+        .config("spark.sql.adaptive.enabled", "true")
+        .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer"))
+
+    # In containerized cluster mode, ensure proper driver host / bind if provided
+    driver_host = os.environ.get("SPARK_DRIVER_HOST")
+    if driver_host:
+        builder = builder.config("spark.driver.host", driver_host)
+    driver_bind = os.environ.get("SPARK_DRIVER_BIND_ADDRESS")
+    if driver_bind:
+        builder = builder.config("spark.driver.bindAddress", driver_bind)
+
+    return builder.getOrCreate()
 
 def get_postgres_connection():
     """Get PostgreSQL connection for storing analytics results"""
