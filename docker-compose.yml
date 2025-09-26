@@ -129,26 +129,6 @@ services:
         aliases: [spark-worker]
 
   # Additional Spark Worker to give batch jobs capacity
-  spark-worker-2:
-    image: bitnami/spark:3.4
-    container_name: spark-worker-2
-    environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_MEMORY=2G
-      - SPARK_WORKER_CORES=2
-      - SPARK_RPC_AUTHENTICATION_ENABLED=no
-      - SPARK_RPC_ENCRYPTION_ENABLED=no
-      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
-      - SPARK_SSL_ENABLED=no
-    volumes:
-      - ./:/app
-      - spark-logs:/opt/bitnami/spark/logs
-    depends_on:
-      - spark-master
-    networks:
-      hftnet:
-        aliases: [spark-worker-2]
 
   # PostgreSQL for Airflow AND Analytics
   postgres:
