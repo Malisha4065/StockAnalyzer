@@ -1,4 +1,4 @@
-alpha_vantage
+yfinance
 pandas
 pyarrow
 requests

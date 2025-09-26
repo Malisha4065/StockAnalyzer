@@ -200,7 +200,6 @@ services:
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
       AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
       AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
-      ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY}
       SPARK_APP_DIR: /app
       SPARK_BATCH_FILE: spark_batch.py
     volumes:
@@ -242,7 +241,6 @@ services:
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
       AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
       AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
-      ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY}
       SPARK_APP_DIR: /app
       SPARK_BATCH_FILE: spark_batch.py
     volumes:
@@ -282,7 +280,6 @@ services:
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
       AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
       AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
-      ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY}
       SPARK_APP_DIR: /app
       SPARK_BATCH_FILE: spark_batch.py
       SPARK_DRIVER_HOST: airflow-worker
@@ -308,7 +305,6 @@ services:
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - REDIS_URL=redis://redis:6379/0
-      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}
     volumes:
       - ./:/app
     restart: always

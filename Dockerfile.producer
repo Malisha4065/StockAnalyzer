@@ -6,7 +6,7 @@ WORKDIR /app
 # Install system dependencies for snappy compression and Python packages
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends build-essential libsnappy-dev \
-	&& pip install --no-cache-dir kafka-python alpha_vantage pandas redis python-snappy \
+	&& pip install --no-cache-dir kafka-python yfinance pandas redis python-snappy \
 	&& apt-get purge -y --auto-remove build-essential \
 	&& rm -rf /var/lib/apt/lists/*
 

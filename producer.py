@@ -1,6 +1,6 @@
 # producer.py - HFT Market Data Feed Simulator
 from kafka import KafkaProducer
-from alpha_vantage.timeseries import TimeSeries
+import yfinance as yf
 import json, time, random
 import os
 import redis
@@ -9,10 +9,6 @@ from datetime import datetime
 # Configuration
 bootstrap_servers = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
 redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-api_key = os.getenv('ALPHA_VANTAGE_API_KEY')
-
-if not api_key:
-    raise ValueError("ALPHA_VANTAGE_API_KEY environment variable is required")
 
 # Initialize Redis for caching latest prices
 redis_client = redis.from_url(redis_url, decode_responses=True)
@@ -75,15 +71,17 @@ def simulate_market_tick(symbol, base_price):
     }
 
 def get_real_price_update(symbol):
-    """Get real price from Alpha Vantage (less frequent)"""
+    """Get real price from yfinance"""
     try:
-        ts = TimeSeries(key=api_key, output_format='pandas')
-        data, meta_data = ts.get_intraday(symbol=symbol, interval='1min', outputsize='compact')
+        ticker = yf.Ticker(symbol)
+        # Get latest data (1 day with 1-minute intervals)
+        hist = ticker.history(period="1d", interval="1m")
         
-        if not data.empty:
-            latest_data = data.iloc[0]
-            real_price = float(latest_data["4. close"])
-            volume = int(latest_data["5. volume"])
+        if not hist.empty:
+            # Get the most recent price data
+            latest_data = hist.iloc[-1]
+            real_price = float(latest_data["Close"])
+            volume = int(latest_data["Volume"])
             
             # Cache the real price
             PRICE_CACHE[symbol] = real_price
@@ -118,7 +116,7 @@ REAL_DATA_INTERVAL = 60  # seconds
 
 while True:
     try:
-        # Every 60 seconds, get real price from Alpha Vantage for one symbol
+        # Every 60 seconds, get real price from yfinance for one symbol
         if real_data_counter % REAL_DATA_INTERVAL == 0:
             symbol_to_update = SYMBOLS[random.randint(0, len(SYMBOLS)-1)]
             real_price, real_volume = get_real_price_update(symbol_to_update)
