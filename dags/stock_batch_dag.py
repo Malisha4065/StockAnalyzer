@@ -8,6 +8,7 @@ import redis
 import json
 import logging
 import os
+import sys
 from importlib import import_module
 
 log = logging.getLogger(__name__)
@@ -18,6 +19,11 @@ def run_batch_analytics():
         log.info("Starting HFT batch analytics...")
         os.environ.setdefault("SPARK_MASTER_URL", "spark://spark-master:7077")
         os.environ.setdefault("HDFS_NAMENODE", "hdfs://namenode:9000")
+
+        # Ensure project root (mounted at /app) is importable inside Airflow containers
+        project_root = os.environ.get("SPARK_APP_DIR", "/app")
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
 
         spark_batch_module = os.environ.get("SPARK_BATCH_MODULE", "spark_batch")
         spark_batch_attr = os.environ.get("SPARK_BATCH_ENTRYPOINT", "main")
