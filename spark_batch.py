@@ -205,20 +205,31 @@ def main():
     print("Starting HFT Batch Analytics Pipeline...")
     
     spark = create_spark_session()
-    hdfs_namenode = os.getenv('HDFS_NAMENODE', 'hdfs://localhost:9000')
+    # Use a single consistent default for HDFS namenode (container hostname 'namenode')
+    hdfs_namenode = os.getenv('HDFS_NAMENODE', 'hdfs://namenode:9000')
     
     try:
         # Check if HDFS data exists before trying to read using Hadoop FS API for fast existence check
         print("Checking for historical signals in HDFS...")
         signals_path = f"{hdfs_namenode}/stock_data/signals"
-        
-        # Use Spark's underlying Hadoop FileSystem API to check path
-        # This avoids the "Wrong FS" error by using the session's configured filesystem
+
+        # Diagnostics: log effective fs.defaultFS and namenode resolution
         sc = spark.sparkContext
-        fs = sc._jvm.org.apache.hadoop.fs.FileSystem.get(sc._jsc.hadoopConfiguration())
+        hc = sc._jsc.hadoopConfiguration()
+        effective_default = hc.get("fs.defaultFS")
+        print(f"Effective fs.defaultFS = {effective_default}")
+        if effective_default and not signals_path.startswith(effective_default):
+            print(f"[WARN] signals_path ({signals_path}) not prefixed by fs.defaultFS; will still attempt absolute path access")
+
+        # Use Hadoop FileSystem API with timing for existence check
+        import time
+        start_chk = time.time()
+        fs = sc._jvm.org.apache.hadoop.fs.FileSystem.get(hc)
         path_obj = sc._jvm.org.apache.hadoop.fs.Path(signals_path)
-        
-        if not fs.exists(path_obj):
+        exists = fs.exists(path_obj)
+        dur = (time.time() - start_chk) * 1000
+        print(f"Existence check result={exists} latency={dur:.1f} ms for {signals_path}")
+        if not exists:
             print(f"Signals path does not exist yet: {signals_path}")
             print("Run streaming job longer to accumulate data before analytics.")
             return
