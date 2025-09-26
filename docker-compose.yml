@@ -137,6 +137,12 @@ services:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
       POSTGRES_DB: airflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
       - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -159,6 +165,7 @@ services:
       context: .
       dockerfile: Dockerfile.airflow
     container_name: airflow-webserver
+    restart: unless-stopped
     command: webserver
     entrypoint: |
       bash -c "
@@ -167,13 +174,19 @@ services:
       airflow webserver
       "
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     environment:
       AIRFLOW__CORE__EXECUTOR: CeleryExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
       AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
       AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_PRE_PING: 'True'
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE: '1800'
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE: '5'
+      AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW: '10'
       AIRFLOW__CORE__FERNET_KEY: ''
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
@@ -196,15 +209,22 @@ services:
       context: .
       dockerfile: Dockerfile.airflow
     container_name: airflow-scheduler
+    restart: unless-stopped
     command: scheduler
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     environment:
       AIRFLOW__CORE__EXECUTOR: CeleryExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
       AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
       AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_PRE_PING: 'True'
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE: '1800'
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE: '5'
+      AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW: '10'
       AIRFLOW__CORE__FERNET_KEY: ''
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
@@ -225,15 +245,22 @@ services:
       context: .
       dockerfile: Dockerfile.airflow
     container_name: airflow-worker
+    restart: unless-stopped
     command: celery worker
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     environment:
       AIRFLOW__CORE__EXECUTOR: CeleryExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
       AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
       AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_PRE_PING: 'True'
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_RECYCLE: '1800'
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE: '5'
+      AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW: '10'
       AIRFLOW__CORE__FERNET_KEY: ''
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'

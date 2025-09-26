@@ -212,14 +212,37 @@ def main():
     spark = create_spark_session()
     # Use a single consistent default for HDFS namenode (container hostname 'namenode')
     hdfs_namenode = os.getenv('HDFS_NAMENODE', 'hdfs://namenode:9000')
+    master_url = os.environ.get("SPARK_MASTER_URL", "local[*]")
+    preflight_timeout = int(os.getenv("SPARK_BATCH_PREFLIGHT_TIMEOUT", "40"))  # seconds
+    executor_wait_interval = 2  # seconds
     
     try:
         # Preflight: ensure Spark can execute a trivial job (isolates cluster connectivity vs HDFS issues)
         try:
-            print("Running Spark connectivity preflight (range(1e3).count)...")
             import time as _t
+            sc = spark.sparkContext
+            if master_url.startswith("spark://"):
+                print("Polling for Spark executors (excluding driver)...")
+                start_poll = _t.time()
+                reported = set()
+                while _t.time() - start_poll < preflight_timeout:
+                    infos = sc.statusTracker().getExecutorInfos()
+                    # executor ID 'driver' always present; look for others
+                    executors = [e.executorId() for e in infos if e.executorId() != 'driver']
+                    if executors:
+                        print(f"Executors available: {executors}")
+                        break
+                    remaining = preflight_timeout - int(_t.time() - start_poll)
+                    if remaining not in reported:
+                        print(f"  Waiting for executors... {remaining}s left")
+                        reported.add(remaining)
+                    _t.sleep(executor_wait_interval)
+                else:
+                    print(f"[WARN] No executors registered within {preflight_timeout}s; proceeding anyway (job may be queued until worker free)")
+
+            print("Running Spark connectivity preflight (small parallelize count)...")
             _t0 = _t.time()
-            preflight_count = spark.range(0, 1000).count()
+            preflight_count = sc.parallelize([1,2,3,4,5]).count()
             print(f"Preflight success: count={preflight_count} latency={( _t.time()-_t0)*1000:.1f} ms")
         except Exception as pre_err:
             print(f"Preflight Spark job failed early: {pre_err}")
