@@ -134,17 +134,23 @@ def main():
                 .otherwise(lit(0.0))
             ) \
             .withColumn("signal",
-                when(col("price_momentum") > 2.0, "BUY")
-                .when(col("price_momentum") < -2.0, "SELL")
+                # If momentum is even slightly positive (>0.1%), signal a BUY
+                when(col("price_momentum") > 0.1, "BUY")
+                # If momentum is even slightly negative (<-0.1%), signal a SELL
+                .when(col("price_momentum") < -0.1, "SELL")
                 .otherwise("HOLD")
             ) \
             .withColumn("confidence",
                 when(col("signal") == "BUY",
-                     when(col("price_momentum") > 10.0, lit(1.0))
-                     .otherwise((col("price_momentum") - 2.0) / 8.0))
+                     # A momentum of 1.1% or higher is now considered max confidence (1.0)
+                     when(col("price_momentum") > 1.1, lit(1.0))
+                     # Scale confidence between 0.1% and 1.1% momentum
+                     .otherwise((col("price_momentum") - 0.1) / 1.0))
                 .when(col("signal") == "SELL",
-                     when(col("price_momentum") < -10.0, lit(1.0))
-                     .otherwise((-col("price_momentum") - 2.0) / 8.0))
+                     # A momentum of -1.1% or lower is now considered max confidence (1.0)
+                     when(col("price_momentum") < -1.1, lit(1.0))
+                     # Scale confidence between -0.1% and -1.1% momentum
+                     .otherwise((-col("price_momentum") - 0.1) / 1.0))
                 .otherwise(lit(0.0))
             ) \
             .drop("window_end") \
