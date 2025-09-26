@@ -3,8 +3,12 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
-# Install required Python packages
-RUN pip install kafka-python alpha_vantage pandas redis
+# Install system dependencies for snappy compression and Python packages
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends build-essential libsnappy-dev \
+	&& pip install --no-cache-dir kafka-python alpha_vantage pandas redis python-snappy \
+	&& apt-get purge -y --auto-remove build-essential \
+	&& rm -rf /var/lib/apt/lists/*
 
 # Copy the producer script
 COPY producer.py /app/

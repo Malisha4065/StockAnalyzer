@@ -1,10 +1,18 @@
 # spark_streaming.py - HFT Real-time Signal Generation Engine
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col, avg, window, lag, when, lit, max as spark_max, min as spark_min
+from pyspark.sql.functions import (
+    from_json,
+    col,
+    avg,
+    window,
+    when,
+    lit,
+    max as spark_max,
+    min as spark_min,
+    coalesce
+)
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType
-import os, time, subprocess, redis, uuid, json
-from pyspark.sql import Row
-from pyspark.sql.window import Window
+import os, redis, json
 
 def create_spark_session():
     """Create optimized Spark session for HFT"""
@@ -34,7 +42,7 @@ def send_signal_to_redis(batch_df, batch_id):
                 "symbol": signal.symbol,
                 "action": signal.signal,
                 "confidence": float(signal.confidence) if signal.confidence else 0.0,
-                "price": float(signal.current_price),
+                "price": float(signal.current_price) if signal.current_price else 0.0,
                 "ma_short": float(signal.ma_short) if signal.ma_short else 0.0,
                 "ma_long": float(signal.ma_long) if signal.ma_long else 0.0,
                 "timestamp": str(signal.window),
@@ -94,45 +102,51 @@ def main():
         
         print("Creating HFT trading signals...")
         
-        # Calculate moving averages and generate signals
-        window_spec = Window.partitionBy("symbol").orderBy("timestamp")
-        
-        signals_df = parsed_df \
-            .withWatermark("timestamp", "2 minutes") \
-            .groupBy(
-                window(col("timestamp"), "30 seconds", "5 seconds"),
-                col("symbol")
-            ).agg(
-                avg("price").alias("ma_short"),
-                avg("volume").alias("avg_volume"),
-                spark_max("price").alias("high"),
-                spark_min("price").alias("low")
-            ).withColumn("current_price", col("ma_short")) \
-            .withColumn("ma_long", 
-                lag(col("ma_short"), 6).over(
-                    Window.partitionBy("symbol").orderBy("window")
-                )
-            ) \
-            .withColumn("price_momentum", 
-                when(col("ma_long").isNotNull(), 
-                    (col("ma_short") - col("ma_long")) / col("ma_long") * 100)
+        # Prepare streaming aggregates for short- and long-term views
+        prices_with_watermark = parsed_df.withWatermark("timestamp", "2 minutes")
+
+        short_window_metrics = prices_with_watermark.groupBy(
+            window(col("timestamp"), "30 seconds", "5 seconds").alias("window"),
+            col("symbol")
+        ).agg(
+            avg("price").alias("ma_short"),
+            avg("volume").alias("avg_volume"),
+            spark_max("price").alias("high"),
+            spark_min("price").alias("low")
+        ).withColumn("current_price", col("ma_short")) \
+         .withColumn("window_end", col("window").getField("end"))
+
+        long_window_metrics = prices_with_watermark.groupBy(
+            window(col("timestamp"), "2 minutes", "5 seconds").alias("window"),
+            col("symbol")
+        ).agg(
+            avg("price").alias("ma_long")
+        ).withColumn("window_end", col("window").getField("end")) \
+         .select("symbol", "window_end", "ma_long")
+
+        signals_df = short_window_metrics.join(long_window_metrics, ["symbol", "window_end"], "left") \
+            .withColumn("ma_long", coalesce(col("ma_long"), col("ma_short"))) \
+            .withColumn("price_momentum",
+                when((col("ma_long") > 0) & col("ma_short").isNotNull(),
+                     (col("ma_short") - col("ma_long")) / col("ma_long") * 100)
                 .otherwise(lit(0.0))
             ) \
             .withColumn("signal",
                 when(col("price_momentum") > 2.0, "BUY")
-                .when(col("price_momentum") < -2.0, "SELL")  
+                .when(col("price_momentum") < -2.0, "SELL")
                 .otherwise("HOLD")
             ) \
             .withColumn("confidence",
-                when(col("signal") == "BUY", 
-                    when(col("price_momentum") > 10.0, lit(1.0))
-                    .otherwise((col("price_momentum") - 2.0) / 8.0))
-                .when(col("signal") == "SELL", 
-                    when(col("price_momentum") < -10.0, lit(1.0))
-                    .otherwise((-col("price_momentum") - 2.0) / 8.0))
+                when(col("signal") == "BUY",
+                     when(col("price_momentum") > 10.0, lit(1.0))
+                     .otherwise((col("price_momentum") - 2.0) / 8.0))
+                .when(col("signal") == "SELL",
+                     when(col("price_momentum") < -10.0, lit(1.0))
+                     .otherwise((-col("price_momentum") - 2.0) / 8.0))
                 .otherwise(lit(0.0))
             ) \
-            .filter(col("signal") != "HOLD")  # Only send actionable signals
+            .drop("window_end") \
+            .filter(col("signal") != "HOLD")
         
         print("Starting signal generation stream...")
         
