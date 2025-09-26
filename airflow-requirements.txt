@@ -4,4 +4,4 @@ pyarrow
 requests
 redis
 psycopg2-binary
-pyspark==3.4.3
+pyspark==3.4.1
