@@ -9,8 +9,10 @@ from datetime import datetime, timedelta
 
 def create_spark_session():
     """Create Spark session optimized for batch analytics"""
+    master_url = os.environ.get("SPARK_MASTER_URL", "local[*]")
     return SparkSession.builder \
         .appName("HFT_Batch_Analytics") \
+        .master(master_url) \
         .config("spark.sql.adaptive.enabled", "true") \
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \

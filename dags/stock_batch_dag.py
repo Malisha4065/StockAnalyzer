@@ -3,13 +3,12 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
-import subprocess
 import psycopg2
 import redis
 import json
 import logging
 import os
-from pathlib import Path
+from importlib import import_module
 
 log = logging.getLogger(__name__)
 
@@ -17,41 +16,23 @@ def run_batch_analytics():
     """Trigger Spark batch analytics job"""
     try:
         log.info("Starting HFT batch analytics...")
-        spark_app_dir = Path(os.environ.get("SPARK_APP_DIR", "/app")).resolve()
-        spark_batch_file = os.environ.get("SPARK_BATCH_FILE", "spark_batch.py")
-        script_path = spark_app_dir / spark_batch_file
+        os.environ.setdefault("SPARK_MASTER_URL", "spark://spark-master:7077")
+        os.environ.setdefault("HDFS_NAMENODE", "hdfs://namenode:9000")
 
-        if not script_path.exists():
-            fallback_path = (Path(__file__).resolve().parent / spark_batch_file).resolve()
-            if fallback_path.exists():
-                log.warning(
-                    "Configured Spark batch script '%s' missing at %s; falling back to %s",
-                    spark_batch_file,
-                    script_path,
-                    fallback_path,
-                )
-                script_path = fallback_path
-                spark_app_dir = fallback_path.parent
-            else:
-                raise FileNotFoundError(
-                    f"Unable to locate Spark batch script. Checked {script_path} and {fallback_path}."
-                )
-        else:
-            log.info("Using Spark batch script at %s", script_path)
-        
-        # Run Spark batch job
-        result = subprocess.run([
-            "spark-submit",
-            "--master", "spark://spark-master:7077",
-            str(script_path)
-        ], capture_output=True, text=True, cwd=str(spark_app_dir))
-        
-        if result.returncode == 0:
-            log.info("Batch analytics completed successfully")
-            log.info(result.stdout)
-        else:
-            log.error(f"Batch analytics failed: {result.stderr}")
-            raise Exception(f"Spark job failed: {result.stderr}")
+        spark_batch_module = os.environ.get("SPARK_BATCH_MODULE", "spark_batch")
+        spark_batch_attr = os.environ.get("SPARK_BATCH_ENTRYPOINT", "main")
+
+        module = import_module(spark_batch_module)
+        entrypoint = getattr(module, spark_batch_attr, None)
+
+        if entrypoint is None:
+            raise AttributeError(
+                f"Entrypoint '{spark_batch_attr}' not found in module '{spark_batch_module}'"
+            )
+
+        log.info("Invoking %s.%s", spark_batch_module, spark_batch_attr)
+        entrypoint()
+        log.info("Batch analytics completed successfully")
             
     except Exception as e:
         log.error(f"Error in batch analytics: {e}")
