@@ -17,7 +17,12 @@ def run_batch_analytics():
     """Trigger Spark batch analytics job"""
     try:
         log.info("Starting HFT batch analytics...")
-        os.environ.setdefault("SPARK_MASTER_URL", "spark://spark-master:7077")
+        # Allow forcing local mode for batch independently without changing streaming job
+        if os.environ.get("BATCH_LOCAL_MODE", "0") == "1":
+            os.environ["SPARK_MASTER_URL"] = "local[*]"
+            log.info("BATCH_LOCAL_MODE=1 -> Using local[*] for batch Spark session")
+        else:
+            os.environ.setdefault("SPARK_MASTER_URL", "spark://spark-master:7077")
         os.environ.setdefault("HDFS_NAMENODE", "hdfs://namenode:9000")
 
         # Ensure project root (mounted at /app) is importable inside Airflow containers

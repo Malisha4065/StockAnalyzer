@@ -110,6 +110,25 @@ services:
     depends_on:
       - spark-master
 
+  # Additional Spark Worker to give batch jobs capacity
+  spark-worker-2:
+    image: bitnami/spark:3.4
+    container_name: spark-worker-2
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    volumes:
+      - ./:/app
+      - spark-logs:/opt/bitnami/spark/logs
+    depends_on:
+      - spark-master
+
   # PostgreSQL for Airflow AND Analytics
   postgres:
     image: postgres:13
@@ -266,7 +285,16 @@ services:
       - FRESH_RUN=0
     volumes:
       - ./:/app
-    command: ["spark-submit", "--master", "spark://spark-master:7077", "--packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0", "/app/spark_streaming.py"]
+    # Limit streaming job to 1 core per executor to leave room for batch
+    command:
+      - spark-submit
+      - --master
+      - spark://spark-master:7077
+      - --conf
+      - spark.executor.cores=1
+      - --packages
+      - org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0
+      - /app/spark_streaming.py
 
   # Trading System (Executes trades based on signals)
   trading-system:
