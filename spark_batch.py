@@ -205,9 +205,26 @@ def main():
     hdfs_namenode = os.getenv('HDFS_NAMENODE', 'hdfs://localhost:9000')
     
     try:
-        # Read historical signals from HDFS
-        print("Reading historical signals from HDFS...")
-        signals_df = spark.read.parquet(f"{hdfs_namenode}/stock_data/signals")
+        # Check if HDFS data exists before trying to read
+        print("Checking for historical signals in HDFS...")
+        signals_path = f"{hdfs_namenode}/stock_data/signals"
+        
+        try:
+            # Try to read the schema first to check if data exists
+            signals_df = spark.read.parquet(signals_path)
+            row_count = signals_df.count()
+            print(f"Found {row_count} historical signals in HDFS")
+            
+            if row_count == 0:
+                print("No historical data available yet. Batch analytics needs streaming data first.")
+                print("Make sure the Spark streaming job has been running to collect data.")
+                return
+                
+        except Exception as e:
+            print(f"No historical signals found in HDFS: {e}")
+            print("This is normal on first run. The streaming job needs to run first to collect data.")
+            print(f"Expected path: {signals_path}")
+            return
         
         # Read historical price data  
         try:
