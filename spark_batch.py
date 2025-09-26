@@ -10,9 +10,12 @@ from datetime import datetime, timedelta
 def create_spark_session():
     """Create Spark session optimized for batch analytics"""
     master_url = os.environ.get("SPARK_MASTER_URL", "local[*]")
+    hdfs_url = os.environ.get("HDFS_NAMENODE", "hdfs://namenode:9000")
+    
     builder = (SparkSession.builder
         .appName("HFT_Batch_Analytics")
         .master(master_url)
+        .config("spark.hadoop.fs.defaultFS", hdfs_url)
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer"))
@@ -208,12 +211,13 @@ def main():
         # Check if HDFS data exists before trying to read using Hadoop FS API for fast existence check
         print("Checking for historical signals in HDFS...")
         signals_path = f"{hdfs_namenode}/stock_data/signals"
-        hadoop_conf = spark._jsc.hadoopConfiguration()
-        from py4j.java_gateway import java_import
-        java_import(spark._jvm, "org.apache.hadoop.fs.Path")
-        java_import(spark._jvm, "org.apache.hadoop.fs.FileSystem")
-        fs = spark._jvm.FileSystem.get(hadoop_conf)
-        path_obj = spark._jvm.Path(signals_path)
+        
+        # Use Spark's underlying Hadoop FileSystem API to check path
+        # This avoids the "Wrong FS" error by using the session's configured filesystem
+        sc = spark.sparkContext
+        fs = sc._jvm.org.apache.hadoop.fs.FileSystem.get(sc._jsc.hadoopConfiguration())
+        path_obj = sc._jvm.org.apache.hadoop.fs.Path(signals_path)
+        
         if not fs.exists(path_obj):
             print(f"Signals path does not exist yet: {signals_path}")
             print("Run streaming job longer to accumulate data before analytics.")
