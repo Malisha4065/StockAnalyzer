@@ -23,6 +23,7 @@ def create_spark_session():
         .config("spark.hadoop.fs.hdfs.impl", "org.apache.hadoop.hdfs.DistributedFileSystem")
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+        .config("spark.cores.max", "1")
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer"))
 
     # In containerized cluster mode, ensure proper driver host / bind if provided
